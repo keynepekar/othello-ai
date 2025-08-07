@@ -7,8 +7,8 @@ RIGHT = 0x8080808080808080  # rightmost column -> bits 7...63
 # Shifts
 shift_n = lambda b: (b >> 8) & FULL
 shift_s = lambda b: (b << 8) & FULL
-shift_e = lambda b: ((b << 1) & FULL) & ~RIGHT
-shift_w = lambda b: ((b >> 1) & FULL) & ~LEFT
+shift_e = lambda b: ((b & ~RIGHT) << 1) & FULL
+shift_w = lambda b: ((b & ~LEFT) >> 1) & FULL
 shift_ne = lambda b: shift_n(shift_e(b))
 shift_nw = lambda b: shift_n(shift_w(b))
 shift_se = lambda b: shift_s(shift_e(b))
@@ -114,3 +114,10 @@ if __name__ == "__main__":
     print(bin(LEFT))
     print(bin(RIGHT))
     print(bin(FULL))
+
+    b = BoardBitboard()
+    print(b.legal_moves(1))
+    print(b.legal_moves(2))
+    print(b.apply_move((2, 3), 2))
+    print(bin(b.white))
+    print(bin(b.black))
