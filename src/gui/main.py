@@ -8,7 +8,7 @@ CELL_SIZE = 60
 BOARD_ORIGIN = (20, 80)
 BOARD_SIZE = CELL_SIZE * 8
 TOP_PANEL_HEIGHT = 60
-RIGHT_PANEL_WIDTH = 450
+RIGHT_PANEL_WIDTH = 500
 
 SCREEN_WIDTH = BOARD_ORIGIN[0] + BOARD_SIZE + RIGHT_PANEL_WIDTH + 20
 SCREEN_HEIGHT = TOP_PANEL_HEIGHT + BOARD_SIZE + 20
@@ -22,9 +22,8 @@ PANEL_BG = (48, 48, 48)
 FONT_COLOR = (220, 220, 220)
 
 # -- AI SETTINGS
-PLAYER_TYPES = ["human", "minimax", "negamax"]
+PLAYER_TYPES = ["human", "minimax", "minimax-ab", "negamax", "negamax-ab"]
 SEARCH_DEPTH = 4
-AB = True
 
 pygame.init()
 pygame.display.set_caption("Othello AI")
@@ -32,13 +31,34 @@ screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
 font = pygame.font.SysFont(None, 24)
 clock = pygame.time.Clock()
 
-REPLAY_RECT = pygame.Rect(
-    BOARD_ORIGIN[0] + BOARD_SIZE + RIGHT_PANEL_WIDTH - 120, 12, 100, 32
+CTRL_BUTTON = pygame.Rect(
+    BOARD_ORIGIN[0] + BOARD_SIZE + RIGHT_PANEL_WIDTH - 100, 12, 100, 32
 )
 
 
-def draw_top_panel(board: BoardBitboard, turn_color: int, game_over: bool):
-    # bg
+# -- HELPERS
+def button_label(state: str) -> str:
+    if state in ("setup", "paused"):
+        return "Start"
+    if state == "running":
+        return "Pause"
+    return "Replay"
+
+
+def game_is_over(board: BoardBitboard) -> bool:
+    return not board.legal_moves(1) and not board.legal_moves(2)
+
+
+def reset_game():
+    stats = {"B": {"total": 0, "moves": 0}, "W": {"total": 0, "moves": 0}}
+    board = BoardBitboard()
+    turn = 2
+    logs = ["Game reset, waiting for start"]
+    return board, turn, logs, "setup", False, stats
+
+
+# -- GUI
+def draw_top_panel(board: BoardBitboard, turn_color: int, state: str):
     pygame.draw.rect(screen, BG, (0, 0, SCREEN_WIDTH, TOP_PANEL_HEIGHT))
     pygame.draw.rect(
         screen,
@@ -46,26 +66,24 @@ def draw_top_panel(board: BoardBitboard, turn_color: int, game_over: bool):
         (20, 10, BOARD_SIZE, TOP_PANEL_HEIGHT * 0.7),
         border_radius=15,
     )
-    # score
+    # scores
     white_count = board.white.bit_count()
     black_count = board.black.bit_count()
-    txt = font.render(f"Black: {black_count}", True, FONT_COLOR)
-    screen.blit(txt, (50, 25))
-    txt = font.render(f"White: {white_count}", True, FONT_COLOR)
-    screen.blit(txt, (200, 25))
+    screen.blit(font.render(f"Black: {black_count}", True, FONT_COLOR), (50, 25))
+    screen.blit(font.render(f"White: {white_count}", True, FONT_COLOR), (200, 25))
     # player turn
     center = (400, TOP_PANEL_HEIGHT // 2 + 1)
     color = BLACK if turn_color == 2 else WHITE
     pygame.draw.circle(screen, color, center, 15)
     pygame.draw.circle(screen, FONT_COLOR, center, 15, 2)
-    # replay
-    if game_over:
-        pygame.draw.rect(screen, (80, 80, 80), REPLAY_RECT, border_radius=8)
-        pygame.draw.rect(screen, (120, 120, 120), REPLAY_RECT, 2, border_radius=8)
-        screen.blit(
-            font.render("Replay", True, FONT_COLOR),
-            (REPLAY_RECT.x + 20, REPLAY_RECT.y + 7),
-        )
+
+    # control btn
+    pygame.draw.rect(screen, (80, 80, 80), CTRL_BUTTON, border_radius=8)
+    pygame.draw.rect(screen, (120, 120, 120), CTRL_BUTTON, 2, border_radius=8)
+    label = button_label(state)
+    screen.blit(
+        font.render(label, True, FONT_COLOR), (CTRL_BUTTON.x + 18, CTRL_BUTTON.y + 7)
+    )
 
 
 def draw_board(board: BoardBitboard, legal_moves):
@@ -102,12 +120,8 @@ def draw_side_panel(logs, settings):
     w = RIGHT_PANEL_WIDTH
     h = BOARD_SIZE
     pygame.draw.rect(screen, BG, (x0, y0, w, h))
-    pygame.draw.rect(
-        screen,
-        PANEL_BG,
-        (x0, y0, w, h),
-        border_radius=15,
-    )
+    pygame.draw.rect(screen, PANEL_BG, (x0, y0, w, h), border_radius=15)
+
     # player types & depth
     d_txt = (
         settings["depth_buffer"] if settings["depth_edit"] else str(settings["depth"])
@@ -122,16 +136,17 @@ def draw_side_panel(logs, settings):
     ]
     settings["_rects"] = []
     for i, txt in enumerate(labels):
-        r = pygame.Rect(x0 + 10, y0 + 10 + i * 30, 430, 24)
+        r = pygame.Rect(x0 + 10, y0 + 10 + i * 30, 480, 24)
         pygame.draw.rect(screen, (70, 70, 70), r, border_radius=6)
         screen.blit(font.render(txt, True, FONT_COLOR), (r.x + 6, r.y + 4))
         settings["_rects"].append(r)
+
     # logs
     for i, line in enumerate(logs[-15:]):
-        txt = font.render(line, True, FONT_COLOR)
-        screen.blit(txt, (x0 + 5, y0 + 120 + i * 20))
+        screen.blit(font.render(line, True, FONT_COLOR), (x0 + 5, y0 + 120 + i * 20))
 
 
+# -- HANDLERS
 def handle_side_click(settings, pos):
     if not settings.get("_rects"):
         return
@@ -148,40 +163,30 @@ def handle_side_click(settings, pos):
 
 
 def ai_turn(board, turn, settings):
-    ptype = settings["black_type"] if turn == 2 else settings["white_type"]
-    if ptype == "human":
+    model = settings["black_type"] if turn == 2 else settings["white_type"]
+    if model == "human":
         return False
     depth = settings["depth"]
-    if ptype == "minimax":
-        move, info = choose_move_minimax(board, turn, depth=depth, use_ab=AB)
-    elif ptype == "negamax":
-        move, info = choose_move_negamax(board, turn, depth=depth, use_ab=AB)
+
+    if model == "minimax":
+        move, info = choose_move_minimax(board, turn, depth=depth, use_ab=False)
+    elif model == "minimax-ab":
+        move, info = choose_move_minimax(board, turn, depth=depth, use_ab=True)
+    elif model == "negamax":
+        move, info = choose_move_negamax(board, turn, depth=depth, use_ab=False)
+    elif model == "negamax-ab":
+        move, info = choose_move_negamax(board, turn, depth=depth, use_ab=True)
     else:
         return False
+
     if move is not None:
         flips = board.apply_move(move, turn)
-        return True, move, flips, info
+        return True, move, flips, info, model
     return False
 
 
-def game_is_over(board: BoardBitboard) -> bool:
-    return not board.legal_moves(1) and not board.legal_moves(2)
-
-
-def reset_game():
-    return (
-        BoardBitboard(),
-        2,
-        ["Game started"],
-        False,
-        False,
-    )
-
-
 def main():
-    board = BoardBitboard()
-    turn = 2
-    logs = ["Game started"]
+    board, turn, logs, state, end_logged, stats = reset_game()
     settings = {
         "black_type": "human",
         "white_type": "human",
@@ -189,17 +194,15 @@ def main():
         "depth_edit": False,
         "depth_buffer": "",
     }
-    game_over = False
-    game_over_logged = False
 
     running = True
     while running:
         legal = board.legal_moves(turn)
 
-        # game ended
-        if game_is_over(board):
-            game_over = True
-            if not game_over_logged:
+        # game ended ?
+        if game_is_over(board) and state != "ended":
+            state = "ended"
+            if not end_logged:
                 w, b = board.white.bit_count(), board.black.bit_count()
                 if b > w:
                     logs.append(f"B won : {b} vs {w}")
@@ -207,22 +210,44 @@ def main():
                     logs.append(f"W won : {w} vs {b}")
                 else:
                     logs.append(f"Draw : {b} vs {w}")
-                game_over_logged = True
+                # AI stats
+                for side, name in (
+                    ("B", settings["black_type"]),
+                    ("W", settings["white_type"]),
+                ):
+                    if name != "human" and stats[side]["moves"] > 0:
+                        tot = stats[side]["total"]
+                        avg = tot / stats[side]["moves"]
+                        logs.append(
+                            f"{side} [{name}] : total={tot} ms | avg={avg:.1f} ms over {stats[side]['moves']} moves"
+                        )
+                end_logged = True
 
         # ai turn
-        ai_done = False
-        ptype = settings["black_type"] if turn == 2 else settings["white_type"]
-        if ptype != "human":
-            res = ai_turn(board, turn, settings)
-            if res:
-                ai_done, move, flips, info = res
-                logs.append(
-                    f"{'B' if turn==2 else 'W'} : {info.algo} d={info.depth} "
-                    f"{move} +{len(flips)} | nodes={info.nodes} t={info.ms}ms s={info.score:.1f}"
-                )
-                turn = 3 - turn
-                if not board.legal_moves(turn):
+        if state == "running":
+            model = settings["black_type"] if turn == 2 else settings["white_type"]
+            if model != "human":
+                res = ai_turn(board, turn, settings)
+                if res:
+                    _, move, flips, info, model_used = res
+                    # log
+                    logs.append(
+                        f"{'B' if turn==2 else 'W'} : {info.algo} d={info.depth} "
+                        f"{move} +{len(flips)} | nodes={info.nodes} t={info.ms}ms s={info.score:.1f}"
+                    )
+                    # AI stats
+                    side_key = "B" if turn == 2 else "W"
+                    stats[side_key]["total"] += info.ms
+                    stats[side_key]["moves"] += 1
+                    # passes
                     turn = 3 - turn
+                    if (
+                        state == "running"
+                        and board.legal_moves(turn) == []
+                        and not game_is_over(board)
+                    ):
+                        logs.append(f"{'B' if turn==2 else 'W'} passes")
+                        turn = 3 - turn
 
         for evt in pygame.event.get():
             if evt.type == pygame.QUIT:
@@ -231,28 +256,49 @@ def main():
             elif evt.type == pygame.MOUSEBUTTONDOWN and evt.button == 1:
                 mx, my = evt.pos
 
-                if game_over and REPLAY_RECT.collidepoint(mx, my):
-                    board, turn, logs, game_over, game_over_logged = reset_game()
+                # ctrl btn
+                if CTRL_BUTTON.collidepoint(mx, my):
+                    if state in ("setup", "paused"):
+                        state = "running"
+                        logs.append("Game running")
+                    elif state == "running":
+                        state = "paused"
+                        logs.append("Paused")
+                    elif state == "ended":
+                        board, turn, logs, state, end_logged, stats = reset_game()
                     continue
 
+                # right panel
                 if mx > BOARD_ORIGIN[0] + BOARD_SIZE:
                     handle_side_click(settings, (mx, my))
                 else:
+                    # board
                     ox, oy = BOARD_ORIGIN
                     if (
-                        ox < mx < ox + BOARD_SIZE
+                        state == "running"
+                        and ox < mx < ox + BOARD_SIZE
                         and TOP_PANEL_HEIGHT < my < TOP_PANEL_HEIGHT + BOARD_SIZE
                     ):
                         c = (mx - ox) // CELL_SIZE
                         r = (my - TOP_PANEL_HEIGHT) // CELL_SIZE
-                        if (r, c) in legal:
+                        if (r, c) in legal and (
+                            settings["black_type"]
+                            if turn == 2
+                            else settings["white_type"]
+                        ) == "human":
                             flips = board.apply_move((r, c), turn)
                             logs.append(
                                 f"{'B' if turn==2 else 'W'} : {(r,c)} = +{len(flips)}"
                             )
                             turn = 3 - turn
-                            if not board.legal_moves(turn):
+                            if (
+                                state == "running"
+                                and board.legal_moves(turn) == []
+                                and not game_is_over(board)
+                            ):
+                                logs.append(f"{'B' if turn==2 else 'W'} passes")
                                 turn = 3 - turn
+
             elif evt.type == pygame.KEYDOWN:
                 if settings["depth_edit"]:
                     if evt.key == pygame.K_RETURN:
@@ -279,8 +325,8 @@ def main():
                         settings["depth"] = max(1, settings["depth"] - 1)
 
         screen.fill(BG)
-        draw_top_panel(board, turn, game_over)
-        draw_board(board, legal)
+        draw_top_panel(board, turn, state)
+        draw_board(board, board.legal_moves(turn) if state == "running" else [])
         draw_side_panel(logs, settings)
         pygame.display.flip()
         clock.tick(60)
