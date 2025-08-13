@@ -12,7 +12,7 @@ class BoardArray:
     def _on_board(self, row, col):
         return 0 <= row < 8 and 0 <= col < 8
 
-    def legal_moves(self, color):
+    def legal_moves(self, color: int) -> list[tuple[int, int]]:
         """
         Returns the list of legal moves for a given color
         """
@@ -36,7 +36,7 @@ class BoardArray:
                         break
         return moves
 
-    def apply_move(self, move, color):
+    def apply_move(self, move: tuple[int, int], color: int) -> list[tuple[int, int]]:
         """
         Play a move (r,c) for a given color and returns all flipped pieces pos
         """
