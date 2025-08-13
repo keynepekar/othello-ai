@@ -1,6 +1,7 @@
 import pygame, sys
 from src.engine.board_bitboard import BoardBitboard
 from src.ai.minimax import choose_move_minimax
+from src.ai.negamax import choose_move_negamax
 
 # -- GUI SETTINGS
 CELL_SIZE = 60
@@ -21,7 +22,7 @@ PANEL_BG = (48, 48, 48)
 FONT_COLOR = (220, 220, 220)
 
 # -- AI SETTINGS
-PLAYER_TYPES = ["human", "minimax"]
+PLAYER_TYPES = ["human", "minimax", "negamax"]
 SEARCH_DEPTH = 4
 AB = True
 
@@ -31,8 +32,12 @@ screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
 font = pygame.font.SysFont(None, 24)
 clock = pygame.time.Clock()
 
+REPLAY_RECT = pygame.Rect(
+    BOARD_ORIGIN[0] + BOARD_SIZE + RIGHT_PANEL_WIDTH - 120, 12, 100, 32
+)
 
-def draw_top_panel(board: BoardBitboard, turn_color: int):
+
+def draw_top_panel(board: BoardBitboard, turn_color: int, game_over: bool):
     # bg
     pygame.draw.rect(screen, BG, (0, 0, SCREEN_WIDTH, TOP_PANEL_HEIGHT))
     pygame.draw.rect(
@@ -53,6 +58,14 @@ def draw_top_panel(board: BoardBitboard, turn_color: int):
     color = BLACK if turn_color == 2 else WHITE
     pygame.draw.circle(screen, color, center, 15)
     pygame.draw.circle(screen, FONT_COLOR, center, 15, 2)
+    # replay
+    if game_over:
+        pygame.draw.rect(screen, (80, 80, 80), REPLAY_RECT, border_radius=8)
+        pygame.draw.rect(screen, (120, 120, 120), REPLAY_RECT, 2, border_radius=8)
+        screen.blit(
+            font.render("Replay", True, FONT_COLOR),
+            (REPLAY_RECT.x + 20, REPLAY_RECT.y + 7),
+        )
 
 
 def draw_board(board: BoardBitboard, legal_moves):
@@ -95,11 +108,17 @@ def draw_side_panel(logs, settings):
         (x0, y0, w, h),
         border_radius=15,
     )
-    # player types
+    # player types & depth
+    d_txt = (
+        settings["depth_buffer"] if settings["depth_edit"] else str(settings["depth"])
+    )
+    if settings["depth_edit"] and (pygame.time.get_ticks() // 500) % 2 == 0:
+        d_txt += "_"
+
     labels = [
         f"Black: {settings['black_type']}",
         f"White: {settings['white_type']}",
-        f"Depth : {settings['depth']}",
+        f"Depth : {d_txt}",
     ]
     settings["_rects"] = []
     for i, txt in enumerate(labels):
@@ -124,7 +143,8 @@ def handle_side_click(settings, pos):
         i = PLAYER_TYPES.index(settings["white_type"])
         settings["white_type"] = PLAYER_TYPES[(i + 1) % len(PLAYER_TYPES)]
     elif r_depth.collidepoint(pos):
-        settings["depth"] = 2 if settings["depth"] >= 8 else settings["depth"] + 1
+        settings["depth_edit"] = True
+        settings["depth_buffer"] = ""
 
 
 def ai_turn(board, turn, settings):
@@ -134,7 +154,8 @@ def ai_turn(board, turn, settings):
     depth = settings["depth"]
     if ptype == "minimax":
         move, info = choose_move_minimax(board, turn, depth=depth, use_ab=AB)
-    # TODO : negamax
+    elif ptype == "negamax":
+        move, info = choose_move_negamax(board, turn, depth=depth, use_ab=AB)
     else:
         return False
     if move is not None:
@@ -143,15 +164,50 @@ def ai_turn(board, turn, settings):
     return False
 
 
+def game_is_over(board: BoardBitboard) -> bool:
+    return not board.legal_moves(1) and not board.legal_moves(2)
+
+
+def reset_game():
+    return (
+        BoardBitboard(),
+        2,
+        ["Game started"],
+        False,
+        False,
+    )
+
+
 def main():
     board = BoardBitboard()
     turn = 2
     logs = ["Game started"]
-    settings = {"black_type": "human", "white_type": "human", "depth": SEARCH_DEPTH}
+    settings = {
+        "black_type": "human",
+        "white_type": "human",
+        "depth": SEARCH_DEPTH,
+        "depth_edit": False,
+        "depth_buffer": "",
+    }
+    game_over = False
+    game_over_logged = False
 
     running = True
     while running:
         legal = board.legal_moves(turn)
+
+        # game ended
+        if game_is_over(board):
+            game_over = True
+            if not game_over_logged:
+                w, b = board.white.bit_count(), board.black.bit_count()
+                if b > w:
+                    logs.append(f"B won : {b} vs {w}")
+                elif w > b:
+                    logs.append(f"W won : {w} vs {b}")
+                else:
+                    logs.append(f"Draw : {b} vs {w}")
+                game_over_logged = True
 
         # ai turn
         ai_done = False
@@ -171,8 +227,14 @@ def main():
         for evt in pygame.event.get():
             if evt.type == pygame.QUIT:
                 running = False
+
             elif evt.type == pygame.MOUSEBUTTONDOWN and evt.button == 1:
                 mx, my = evt.pos
+
+                if game_over and REPLAY_RECT.collidepoint(mx, my):
+                    board, turn, logs, game_over, game_over_logged = reset_game()
+                    continue
+
                 if mx > BOARD_ORIGIN[0] + BOARD_SIZE:
                     handle_side_click(settings, (mx, my))
                 else:
@@ -191,9 +253,33 @@ def main():
                             turn = 3 - turn
                             if not board.legal_moves(turn):
                                 turn = 3 - turn
+            elif evt.type == pygame.KEYDOWN:
+                if settings["depth_edit"]:
+                    if evt.key == pygame.K_RETURN:
+                        if settings["depth_buffer"]:
+                            try:
+                                d = int(settings["depth_buffer"])
+                                settings["depth"] = max(1, min(20, d))
+                            except ValueError:
+                                pass
+                        settings["depth_edit"] = False
+                        settings["depth_buffer"] = ""
+                    elif evt.key == pygame.K_ESCAPE:
+                        settings["depth_edit"] = False
+                        settings["depth_buffer"] = ""
+                    elif evt.key == pygame.K_BACKSPACE:
+                        settings["depth_buffer"] = settings["depth_buffer"][:-1]
+                    else:
+                        if evt.unicode.isdigit() and len(settings["depth_buffer"]) < 2:
+                            settings["depth_buffer"] += evt.unicode
+                else:
+                    if evt.key == pygame.K_UP:
+                        settings["depth"] = min(20, settings["depth"] + 1)
+                    elif evt.key == pygame.K_DOWN:
+                        settings["depth"] = max(1, settings["depth"] - 1)
 
         screen.fill(BG)
-        draw_top_panel(board, turn)
+        draw_top_panel(board, turn, game_over)
         draw_board(board, legal)
         draw_side_panel(logs, settings)
         pygame.display.flip()

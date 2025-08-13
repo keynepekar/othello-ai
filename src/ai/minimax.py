@@ -42,7 +42,7 @@ def _minimax(
         sc = evaluate(board, root_color)
         return sc, None
 
-    # 0 move
+    # pass move
     if not legal:
         return _minimax(
             board,
