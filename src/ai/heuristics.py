@@ -86,11 +86,11 @@ def evaluate(board, color: int, mode: str = "mixed", weights=None) -> float:
             weights = {"disc": 0.2, "pos": 0.3, "mob": 1.0, "front": 0.3}
         else:  # mixed
             if empties > 40:
-                weights = {"disc": 0.2, "pos": 1.0, "mob": 0.0, "front": 0.0}
+                weights = {"disc": 0.1, "pos": 1.0, "mob": 1.3, "front": 0.6}
             elif empties > 12:
-                weights = {"disc": 0.2, "pos": 0.3, "mob": 1.0, "front": 0.3}
+                weights = {"disc": 0.4, "pos": 0.8, "mob": 1.0, "front": 0.4}
             else:
-                weights = {"disc": 1.0, "pos": 0.0, "mob": 0.0, "front": 0.0}
+                weights = {"disc": 1.6, "pos": 0.3, "mob": 0.4, "front": 0.0}
 
     return (
         weights["disc"] * _disc_diff(board, color)
